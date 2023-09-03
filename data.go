@@ -12,8 +12,8 @@ type User struct {
 	ID        uint   `gorm:"primary_key"`
 	Name      string `json:"name"`
 	Mobile    string `json:"mobile"`
-	Latitude  float64
-	Longitude float64
+	Latitude  float64  `json:"latitude,omitempty"`
+	Longitude float64 `json:"logitude,omitempty"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -21,7 +21,7 @@ type User struct {
 // Define the Products table structure
 type Product struct {
 	ProductID               uint     `gorm:"primary_key,em"`
-	UserID                  uint     `json:"user_id"`
+	UserID                  uint     `json:"user_id,omitempty"`
 	ProductName             string   `json:"product_name"`
 	ProductDescription      string   `json:"product_description"`
 	ProductImages           []string `json:"product_images"`
@@ -63,4 +63,12 @@ func UserDatabase() (*gorm.DB, error) {
 	}
 
 	return db, nil
+
 }
+
+user := User{
+	ID: 1,
+	Name: "chandan",
+
+}
+

@@ -7,9 +7,9 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
 
-func sendMessageToKafka(producer *kafka.Producer, productID int) {
+func SendMessageToKafka(producer *kafka.Producer, productID int) {
 	// Produce a message to the Kafka topic
-	topic := "test-topic" // Replace with your Kafka topic
+	topic := "test-topic" //  Kafka topic
 	message := fmt.Sprintf("%d", productID)
 
 	// Produce a message to Kafka
@@ -20,5 +20,10 @@ func sendMessageToKafka(producer *kafka.Producer, productID int) {
 
 	if err != nil {
 		log.Printf("Failed to send message to Kafka: %v", err)
+	} else {
+		fmt.Println(message)
 	}
+	producer.Flush(15 * 100)
+	producer.Close()
+
 }
