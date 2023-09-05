@@ -1,141 +1,108 @@
-package consumers
+package main
 
 import (
-	"ZocketAssigment"
+	"context"
 	"fmt"
-	"image"
-	"image/jpeg"
+	"io"
+	d "kafka/database"
+	p "kafka/producers"
 	"log"
 	"net/http"
 	"os"
-	"strings"
 
-	"github.com/nfnt/resize"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
-
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
-func startKafkaConsumer() {
-	//creating kafka consume and adding kafka consume config
-	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
-		"bootstrap.servers": "kafka:9092", //Kafka broker address
-		"group.id":          "my-consumer-group",
-		"auto.offset.reset": "earliest",
-	})
-
+func downloadCompressAndStoreImage(url string, res int, i int) (string, error) {
+	// Send an HTTP GET request to the URL
+	resp, err := http.Get(url)
 	if err != nil {
-		log.Fatalf("Failed to create Kafka consumer: %v", err)
+		return "", err
 	}
-	defer consumer.Close()
+	defer resp.Body.Close()
 
-	// Subscribe to the Kafka topic
-	topic := "test-topic" //Kafka topic
-	err = consumer.SubscribeTopics([]string{topic}, nil)
+	// Check if the response status code is OK (200)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP GET request failed with status: %s", resp.Status)
+	}
+
+	// Create a directory to store the images if it doesn't exist
+	err = os.MkdirAll("images", os.ModePerm)
 	if err != nil {
-		log.Fatalf("Failed to subscribe to Kafka topic: %v", err)
+		return "", err
 	}
 
-	// Consume Kafka messages
-	for {
-		msg, err := consumer.ReadMessage(-1)
-		if err == nil {
-			// Process the message (e.g., download images and update the database)
-			processKafkaMessage(msg.Value)
-		} else {
-			log.Printf("Error reading Kafka message: %v", err)
-		}
+	// Create a prodcts folder  to store the compressed image
+	imageFolder := fmt.Sprintf("product_%d", res)
+	imageFoladerlocation := fmt.Sprintf("images/%s", imageFolder)
+
+	err = os.MkdirAll(imageFoladerlocation, os.ModePerm)
+	if err != nil {
+		return "", err
 	}
+
+	// Create a prodcts folder  to store the compressed image
+	imagefileName := fmt.Sprintf("%s/images_%v_%v", imageFoladerlocation, res, i)
+	outfilePath, err := os.Create(imagefileName + ".jpeg")
+	if err != nil {
+		return "", err
+	}
+	defer outfilePath.Close()
+	// Copy the response body (image data) to the file
+	_, err = io.Copy(outfilePath, resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	// Update the product with the compressed image paths
+	return imagefileName, nil
 }
 
-var product *ZocketAssigment.Product
+var product d.Product
 
-func GetProductData(data ZocketAssigment.Product) {
-	product := &data
+func main() {
+
+	fmt.Println("in consumer")
+	res, err := p.ReceiveLatestFomKafka()
+	fmt.Println(res)
+	if err != nil {
+		log.Fatal("[error] while getting msg from producer", err)
+	}
+
+	filter := bson.M{"_id": res}
+	_, ProductsCollection, _ := d.ConnectToMongo()
+	if err := ProductsCollection.FindOne(context.Background(), filter).Decode(&product); err != nil {
+		log.Fatal(err)
+	}
+	processProductimage(res, ProductsCollection)
 
 }
 
-func processKafkaMessage(message []byte) {
-	// Implement message processing logic here
-	productID := string(message)
-	log.Printf("Received message from Kafka: Product ID %s", productID)
-	resizedImages := downloadimages(product)
+func processProductimage(a int, ProductsCollection *mongo.Collection) {
 
-	dsn := "user:password@tcp(localhost:3306)/database_name?charset=utf8mb4&parseTime=True&loc=Local"
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	var images []string
+	for _, v := range product.ProductImages {
+		images = append(images, v)
+	}
+
+	var filepath []string
+
+	for i, url := range images {
+		outputFilePath, err := downloadCompressAndStoreImage(url, a, i)
+		if err != nil {
+			fmt.Printf("Error processing image: %v\n", err)
+			continue
+		}
+
+		filepath = append(filepath, `D:\go\src\kafka1\consumers`+outputFilePath)
+
+	}
+
+	update := bson.M{"$set": bson.M{"compressed_product_images": filepath}}
+	_, err := ProductsCollection.UpdateOne(context.Background(), bson.M{"_id": a}, update)
 	if err != nil {
-		// Handle the error
+		fmt.Println(err)
 	}
 
-	if err := db.First(&product, product.productID).Error; err != nil {
-		// Handle the error (e.g., product not found)
-	}
-
-	// Update the field you want to change
-	product.Name = newProductName
-
-	// Save the changes back to the database
-	if err := db.Save(&product).Error; err != nil {
-		// Handle the error
-	}
-
-}
-
-func downloadimages(i []string) []string {
-
-	folderPath := "./resizedPhoto"
-	Width := uint(300)  //  width
-	Height := uint(200) //  height
-
-	err := os.MkdirAll(folderPath, os.ModePerm)
-	if err != nil {
-		fmt.Println("Error creating file:", err)
-	}
-
-	var imageAddresses []string
-
-	for _, url := range i {
-
-		// Send an HTTP GET request to the URL to download the image
-		resp, err := http.Get(url)
-		if err != nil {
-			log.Fatalf("Error creating file: %f", err)
-		}
-
-		defer resp.Body.Close()
-
-		// Extract the image filename from the URL
-		imageFilename := url[strings.LastIndex(url, "/")+1:]
-
-		// Create a full file path including the folder path and image filename
-		fullPath := folderPath + "/" + imageFilename
-
-		// Create a new file to save the downloaded image
-		file, err := os.Create(fullPath)
-		if err != nil {
-			log.Fatalf("Error creating file: %f", err)
-		}
-
-		defer file.Close()
-
-		// Decode the downloaded image
-		img, _, err := image.Decode(resp.Body)
-		if err != nil {
-			log.Fatalf("Error creating file: %f", err)
-		}
-
-		// Resize the image to the specified width and height
-		resizedImg := resize.Resize(Width, Height, img, resize.Lanczos3)
-
-		// Encode the resized image and save it to the file
-		err = jpeg.Encode(file, resizedImg, nil)
-		if err != nil {
-			log.Fatalf("Error creating file: %f", err)
-		}
-
-		fmt.Printf("Downloaded and resized image from %s and saved as %s\n", url, fullPath)
-		imageAddresses = append(imageAddresses, fullPath)
-	}
-	return imageAddresses
 }
